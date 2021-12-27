@@ -1,0 +1,400 @@
+---
+title: "Stat131A_FinalProject"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=60), tidy=TRUE)
+```
+
+# Introduction
+
+We load the data set into R, load all the required libraries, and take a quick glance at the values in the data set.
+
+```{r}
+cholangitis <- read.csv("/Users/setushah/OneDrive/Documents/Classes/Fall 2021/Stat C131A/Final Project/cholangitis.csv")
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(tidyverse))
+suppressMessages(library(pheatmap))
+suppressMessages(library(vioplot))
+suppressMessages(library(leaps))
+glimpse(cholangitis)
+```
+
+
+# Cleaning Data
+
+
+Now we will change character variables to factor variables to help make the data points make logical sense. 
+We change age to number of years (instead of number of days).
+
+```{r}
+cholangitis <- mutate_if(cholangitis, is.character, as.factor)
+cholangitis$stage <- factor(cholangitis$stage, levels = c(1,2,3,4))
+cholangitis$age <- round(cholangitis$age / 365)
+
+#removing the patients who got a liver transplant
+cholangitis <- subset(cholangitis, status != "CL")
+glimpse(cholangitis)
+```
+
+
+# Exploratory Data Analysis
+
+
+After dropping the patients who got a liver transplant, we take a look at the missing (i.e. NA) values in the data set.
+
+```{r}
+summary(is.na(cholangitis))
+
+cholangitis[which(is.na(cholangitis$cholesterol)), ]
+```
+
+We see that `tryglicerides` and `cholesterol` have 5 missing (NA) values each. It appears that this is a data collection error because the missing values refer to data for 5 female patients of varying ages. We will drop the rows from our data for easier computation and since there are so few of them.
+The 100 missing values for the `drug` variable refer to the 100 out of the 106 patients that did not consent to randomization so they received neither the drug nor the placebo. Since they makes up a fair chunk of our data set, we will keep them in the data set for now.
+
+
+Next we, check the summary statistics after cleaning the data.
+
+```{r}
+summary(cholangitis)
+```
+
+
+Here, I'm creating subsets of the original dataset that I will use throughout my analysis. I have presented them at the top for ease of use.
+
+```{r}
+#keeping only numeric variables and dropping id column as it provides no new information
+chol_sub <- cholangitis[, names(which(sapply(cholangitis, is.numeric)))]
+chol_sub <- subset(chol_sub, select = -id)
+
+#creating another data frame for running regression. We remove the id variable here as well
+chol_updated <- na.omit(cholangitis)
+chol_updated <- subset(chol_updated, select = -id)
+invisible(droplevels(chol_updated$status))
+chol_updated$status <- as.numeric(chol_updated$status == "C")
+chol_updated$status <- as.factor(chol_updated$status)
+```
+
+
+```{r}
+#dropping rows with NA values for cholesterol and tryglicerides
+chol_sub <- na.omit(chol_sub)
+```
+
+
+# Visualization
+
+
+Now, we do some visualizations for exploratory data analysis. We will plot histograms with density curves overlaid to see the distribution of the numeric variables.
+
+```{r}
+#EDA - density histograms, we omit NA values to prevent errors
+par(mfrow = c(2,2))
+for (i in names(chol_sub)) { hist(chol_sub[, i],  freq=F, xlab = i, main = "")
+  lines(density(chol_sub[, i]), col = "red")}
+```
+
+Next, we look at boxplots. They are useful as they show us the whiskers (1.5 x IQR) of the data, and can help us identify outliers in the data.
+
+```{r}
+par(mfrow = c(2,2))
+for (i in names(chol_sub)) { boxplot(chol_sub[, i], xlab = i, las = 2) }
+```
+
+We also look at violin plots of the numeric variables to check for variability in these explanatory variables.
+Violin plots are similar to box plots, except that they also show the probability density of the data at different values, usually smoothed by a kernel density estimator.
+
+
+```{r}
+par(mfrow=c(2,2))
+for (i in names(chol_sub)) { vioplot(chol_sub[, i], xlab = i, col = "pink", las = 2) }
+```
+
+From the previous plots we see that many of the variables are right skewed, i.e. they have some large values that might be outliers.We can try log transforming the variables as it will reduce some of the skewness and might improve our analysis.
+
+
+```{r}
+for (i in names(chol_updated[,c(3, 5, 6:9, 19)])) {
+  mosaicplot(status ~ chol_updated[, i], data=na.omit(chol_updated),col = palette(), 
+             ylab = i, main = str_c("Mosaic Plot of status (0=dead, 1=alive) and ", i))}
+```
+
+From the mosaic plots, we observe that the majority of the patients in the study were female (255), yet the proportion of alive patients was greater for males. We also note that almost none of the alive patients had `ascites` present. Additionally, almost none of the alive patients had `edema` as well. From the mosaic plot of `drug`, it seems that the administration of the drug did not have an effect on the outcome of the study.
+
+We look at pairs plots to observe any patterns in the data points or covariance between explanatory variables. The second plot shows the log transformed values.
+
+```{r}
+#pairs(chol_sub, cex=0.5, col = chol_updated$status)
+pairs(chol_sub, cex = 0.5)
+pairs(log(chol_sub), cex = 0.5)
+```
+
+From the above pairs plots, none of the variables seem to be highly correlated or have any obvious linear relationships. We observe that log transformation of the values does improve heteroscedasticity, pulls in the large values, and spreads out values close to zero. It seems like a useful tool for our data set.
+
+
+We also look at the correlation matrix to check the numerical values of covariance. We use heat maps to visualize the correlation matrix (i.e. linear relationships among the explanatory variables).
+
+
+```{r}
+cor((chol_sub))
+pheatmap(cor(chol_sub))
+```
+
+`Bilirubin` is the only variable that seems to have some degree of correlation with some of the other explanatory variables. However, since this correlation is not very high, we will not drop this variable for now.
+
+Now that we finished with our initial exploratory data analysis and visualization, we move onto regression analysis.
+
+
+# Multivariate Regression
+
+
+We run a multivariate regression model with `n_days` (number of days between registration and the earlier of: death, transplantation, or end of study) as our response variable. Then, we look at summary statistics of the linear model and plot the regression diagnostics. We also do variable selection to choose the optimal model.
+
+
+```{r}
+#chol_updated is cholangitis with id variable dropped
+summary(lm(n_days~., data = chol_updated))
+```
+
+We observe that none of the categorical variables except `status` are good predictors (i.e. they are not statistically significant). So, we can fit another model by dropping all categorical variables except `status` and compare the results.
+
+```{r}
+#create new subset by dropping categorical variables and omitting NA values
+chol_alt <- subset(na.omit(chol_updated), select = -c(3,5,6,7,8,9,19))
+chol_fit <- lm(n_days~., data = chol_alt)
+summary(chol_fit)
+```
+
+The significance of `bilirubin` and `copper` increased by one star each as we dropped the categorical variables. It appears that our model has improved and we seem to be on the right track. Although dropping the categorical columns may come across as cherry-picking of the data (or "p-hacking"), I ran multiple models and applied multiple comparison correction (i.e. Bonferroni correction) and only after that did I decide to drop said variables.
+
+Now we plot the regression diagnostics to visualize our fitted model.
+
+```{r}
+par(mfrow=c(2,3))
+plot(chol_fit, which = 1:5)
+```
+
+There are 3 observations with large residuals and large Cook's distances (55,56,87). From the Q-Q plot, we observe that our data largely conforms to the normality condition. However, we notice some heteroscedasticity in the first plot, i.e. large values have higher variance (and mean of larger residuals is increasing).
+
+To deal with the violation of the homoscedasticity regression assumption, we can transform the data (log or square root) and check if that improves our model. But first, we will remove the outliers we identified and recompute our model and compare the results.
+
+
+```{r}
+#removing outliers and plotting regression diagnostics again
+outliers <- which(cooks.distance(chol_fit) > 0.03)
+chol_alt <- chol_alt[-outliers,]
+chol_alt_fit <- lm(n_days~., data = chol_alt)
+summary(chol_alt_fit)
+par(mfrow=c(2,2))
+plot(chol_alt_fit)
+```
+Removing the outliers seems to have improved our model as our R^2 and Adjusted R^2 increased. Also, we now observe that`status` has become significant for both factor levels. `status1` refers to the patient being alive and is highly significant with a p-value close to zero. The intercept term is `status` =  0, which refers to the patient being dead and it is significant with a p-value slightly above 0.1. Hence, `status` is the only categorical variable important to our model.
+
+
+
+```{r}
+par(mfrow=c(2,3))
+temp <- lm(n_days~., data = sqrt(subset(chol_alt, select = -status)))
+plot(temp)
+```
+
+Next we construct Bootstrap and Parametric Models for Global Fit (numerical variables only). We do this to check the robustness of our analysis. We compare the two confidence intervals and plot them to observe the differences visually.
+
+```{r}
+bootstrapLM <- function(y,x, repetitions, df= chol_sub, confidence.level= 0.95){
+  stat.obs <- coef(lm(y~x))
+  bootFun<-function(){
+	  sampled <- sample(1:length(y), size=length(y),replace = TRUE)
+	  coef(lm(y[sampled]~x[sampled]))
+  }
+  stat.boot<-replicate(repetitions,bootFun())
+  nm <-deparse(substitute(x))
+
+  row.names(stat.boot)[2]<-nm
+  level<-1-confidence.level
+  confidence.interval <- apply(stat.boot,1,quantile,probs=c(level/2,1-level/2))
+  out<-cbind("lower"=confidence.interval[1,],
+             "estimate"=stat.obs,"upper"=confidence.interval[2,])
+  return(list(confidence.interval = out))
+}
+
+for (i in names(chol_sub)) {
+
+boot_LM <- bootstrapLM(chol_sub$n_days, chol_sub[, i], 1000)
+boot_CI <- boot_LM$confidence.interval
+BS_fit <- lm(n_days~chol_sub[,i], data = chol_sub)
+parametric_CI <- confint(BS_fit)
+
+boot_test_CI = rbind(c(lower= parametric_CI[1,1], estimate = unname(coef(BS_fit)[1]),
+                     upper = parametric_CI[1,2]), boot_CI[1,])
+
+perm_test_CI = rbind(c(lower = parametric_CI[2,1], estimate = unname(coef(BS_fit)[2]),
+                       upper = parametric_CI[2,2]), boot_CI[2,])
+
+df_plot = data.frame(rbind(boot_test_CI, perm_test_CI))
+df_plot$test = c("Parametric", "Bootstrap", "Parametric", "Bootstrap")
+df_plot$type = c("Intercept", "Intercept", "Slope", "Slope")
+print(ggplot(df_plot, aes(test, estimate)) + geom_point(aes(y= estimate), color = "red") + 
+        geom_errorbar(aes(x= test, ymin = lower, ymax = upper), color = "black", width = 0.5) + facet_grid(~type) + labs(title = i))
+}
+```
+
+From the graphs, we notice that the parametric confidence intervals are slightly wider than the bootstrap ones. This is expected because of the difference in assumptions between the two models and so the parametric model has a little more variability. Even so, we can conclude that our model meets robustness criteria.
+
+
+Next, we do variable selection using the `step` function to find the optimal submodel.
+
+```{r}
+step(chol_alt_fit, direction = "backward", trace = F)
+```
+
+Our optimal model from using `step` to predict `n_days` is `Status` + `Bilirubin` + `Albumin` + `Copper` + `Alk_Phos` + `Prothrombin.`
+
+
+Next, we use `regsubsets` to do variable selection again to check if the results match our results from using the `step` function.
+
+```{r}
+chol_mod_selection <- subset(chol_alt, select = -status)
+reg.sub.out <- regsubsets(n_days~., data = chol_mod_selection)
+summary(reg.sub.out)
+```
+
+So, our optimal model from `regsubsets` is `Albumin` + `Bilirubin` + `Alk_Phos` + `Copper` + `Platelets` + `Age` + `Prothrombin` + `Cholesterol`. The two models gives us different optimal models, which was expected as `regsubsets` does not work well with categorical variables and it is possible to miss the optimal model with `step`.
+ 
+Next, we do model selection by comparing results from AIC and LOOCV (Leave One Out Cross Validation). We plot the results from these methods to check if they give us the same answer.
+
+```{r}
+permut <- sample(1:nrow(chol_mod_selection))
+folds <- cut(1:nrow(chol_mod_selection), breaks = 10, labels = F)
+PredErrorMat <- matrix(nrow = 10, ncol = nrow(summary(reg.sub.out)$which))
+for (i in 1:10) {
+  test_indices <- which(folds == i, arr.ind = T)
+  test_data <- chol_mod_selection[permut, ][test_indices, ]
+  train_data <- chol_mod_selection[permut, ][-test_indices, ]
+  pred_error <- apply(summary(reg.sub.out)$which[, -1], 1,
+                      function(x) {
+                        lm_obj <- lm(train_data$n_days ~.,
+                                     data = train_data[, c("n_days", names(x)[x]), drop = FALSE])
+                        AIC(lm_obj)
+                      })
+  PredErrorMat[i, ] <- pred_error
+}
+
+chol_AIC <- colMeans(PredErrorMat)
+
+LOOCV <- function(lm) {
+  vals <- residuals(lm)/(1 - lm.influence(lm)$hat)
+  sum(vals^2)/length(vals) }
+
+permutation <- sample(1:nrow(chol_mod_selection))
+folds_2 <- cut(1:nrow(chol_mod_selection), breaks = 10, labels = F)
+PredErrorMatrix <- matrix(nrow = 10, ncol = nrow(summary(reg.sub.out)$which))
+for (i in 1:10) {
+  test_indices <- which(folds_2 == i, arr.ind = T)
+  test_data <- chol_mod_selection[permutation, ][test_indices, ]
+  train_data <- chol_mod_selection[permutation, ][-test_indices, ]
+  pred_error <- apply(summary(reg.sub.out)$which[, -1], 1,
+                      function(x) {
+                        lm_obj <- lm(train_data$n_days ~.,
+                                     data = train_data[, c("n_days", names(x)[x]), drop = FALSE])
+                        LOOCV(lm_obj)
+                      })
+  PredErrorMatrix[i, ] <- pred_error
+}
+
+chol_cv <- colMeans(PredErrorMatrix)
+
+par(mfrow=c(1,2))
+plot(1:8, chol_AIC, xlab = "Model Size", ylab = "AIC")
+points(which.min(chol_AIC), min(chol_AIC), col = "red", bg = 22, pch = 21)
+plot(1:8, chol_cv, xlab = "Model Size", ylab = "CV")
+points(which.min(chol_cv), min(chol_cv), col = "red", bg = 22, pch = 21)
+```
+
+
+```{r}
+coef(reg.sub.out, which.min(chol_AIC))
+```
+
+Thus, the results of cross validation (LOOCV) and AIC gives us the same optimal model size (=4). Our optimal model is `Bilirubin` + `Albumin` + `Copper` + `Alk_Phos.` However, it is different than the optimal mode size (=6) that we got from using the `step` function as we removed the `status` categorical variable for running `regsubsets`. We can compare our two nested models by using the `anova` function that uses the F-test.
+
+
+```{r}
+anova(lm(n_days~., data = chol_mod_selection), chol_alt_fit)
+```
+
+Thus, we conclude that adding the `status` variable is highly significant as our p-value from running `anova` is close to zero. So, our overall optimal model (size = 6) is the one given by using the `steps` function. 
+
+
+```{r}
+par(mfrow = c(2,2))
+plot(lm(formula = n_days ~ status + bilirubin + albumin + copper + 
+    alk_phos + prothrombin, data = chol_alt))
+```
+
+Running regression diagnostics on our final model shows us that there is still some heteroscedasticity in our data and we still have outliers that affect our plots. However, we cannot remove these outliers without sufficient domain knowledge. For the same reason, we did not stick with transformations of the data also.
+Our assumption of normality is not violated, so that is one positive. 
+
+
+# Logistic Regression
+
+
+The next step in our analysis is logistic regression. We fit a generalized linear model by using the `glm` function and input "binomial" in the `family` argument to specify that we want to fit a logistic regression model.
+
+We create an intercept only model that we use to check if our model with all the explanatory variables is better. We will use both models to perform variable selection as before.
+
+We plot the regression diagnostics and look at the summary statistics of our bigger model (`chol.log.fit`).
+
+```{r}
+chol.int.fit <- glm(status ~ 1, data = chol_updated, family = "binomial" )
+chol.log.fit <- glm(status~., data = chol_updated, family = "binomial")
+summary(chol.int.fit)
+summary(chol.log.fit)
+par(mfrow=c(2,2))
+plot(chol.log.fit)
+```
+
+```{r}
+#changing levels of status to (0,1) where 0 is dead and 1 is alive
+chol_updated <- na.omit(cholangitis)
+chol_updated <- subset(chol_updated, select = -id)
+invisible(droplevels(chol_updated$status))
+chol_updated$status <- as.numeric(chol_updated$status == "C")
+correct <- chol_updated$status == (chol.log.fit$fitted.values >= 0.5)
+boxplot(fitted(chol.log.fit) ~ chol_updated$status, at = c(0, 1), 
+        outline = F, ylab = "Fitted Values", xlab = "Status")
+points(x = jitter(chol_updated$status), fitted(chol.log.fit), 
+       col = c("red", "blue")[factor(correct)])
+legend("bottomright", legend = c("Incorrect","Correct"), fill = c("red", "blue"), box.lty = 3)
+```
+
+The boxplot visualization shows us that our model is good at predicting at the threshold of 0.5. We changed the factor variable `Status` to a numeric variable for ease of plotting. Our inference remains the same.
+
+Although the Residual Deviance (RD) measures "goodness" of fit, it cannot be used for variable selection because the full model will have the smallest RD. So we use the AIC as a criterion instead (smaller AIC reflects a better model).
+
+```{r}
+anova(chol.int.fit, chol.log.fit, test = "LRT")
+
+AIC(chol.int.fit)
+AIC(chol.log.fit)
+```
+
+We improved our model as the Residual Deviance decreased, as did AIC. So, our model is better than just using the intercept.
+
+
+```{r}
+summary(step(chol.log.fit, direction = "both", trace = F))
+step(chol.int.fit, scope = formula(chol.log.fit), direction = "forward", trace = F)
+```
+
+Running the `step` function models (forward and both) shows us the discrepancies in using this function to compute the optimal model. Even though the values for AIC and Residual Deviance are almost equal, and the size of the models is equal, the variables are in different order. Running regsubsets with categorical variables is too complicated, so we just stick with our current results.
+
+Step ("both") gives us `n_days` + `age` + `sex` + `ascites` + `alk_phos` + `sgot` + `prothrombin` + `stage` + `bilirubin`.
+
+On the other hand, `bilirubin` + `prothrombin` + `n_days` + `alk_phos` + `age` + `sgot` + `sex` + `stage` + `ascites`.
+
+# Conclusion
+
+Without domain knowledge, it is difficult to make inference on the variables or make predictions. But, overall, we see a glimpse of the important numerical variables and the trends in the data. Our application of various methods helps us understand the data and fulfills the job of a statistician (i.e. to do statistical analysis). 
