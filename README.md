@@ -1,5 +1,5 @@
-# Stat_C131A
-**Final Project on Cholangitis data**
+### UC Berkeley Stat_C131A - Statistical Methods for Data Science
+# **Final Project - Cholangitis data**
 
 The data are from a randomized, double-blinded, placebo-controlled clinical trial of the immunosup- pressive drug D-penicillamine at the Mayo Clinic. Patients living with primary biliary cholangitis, a fatal chronic autoimmune disease of unknown cause affecting the liver, were referred to the Mayo Clinic. Of these, 312 were enrolled in the study and randomized to receive the drug or placebo. An additional 106 patients were enrolled, but did not consent to randomization so they received neither the drug nor the placebo. The resulting data thus includes observations from 418 patients. Of these 418, 25 patients received a liver transplant and were dropped from the study because they were in effect “cured” of primary biliary cholangitis. Note that the data related to the variables listed after drug were collected from each patient at the beginning of the study, prior to randomization to either drug or placebo.
 
